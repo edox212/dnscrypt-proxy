@@ -1,12 +1,13 @@
 AC_PREREQ([2.65])
-AC_INIT([dnscrypt-proxy],[1.9.1],[https://dnscrypt.org])
+AC_INIT([dnscrypt-proxy],[1.9.5],[https://dnscrypt.org])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([libltdl/config])
 AC_CONFIG_SRCDIR([src/proxy/app.c])
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_SUBDIRS([src/libevent-modified])
 AC_CANONICAL_HOST
-AM_INIT_AUTOMAKE([1.9 dist-bzip2 tar-ustar gnu subdir-objects])
+AM_INIT_AUTOMAKE([1.11 dist-bzip2 tar-ustar gnu subdir-objects])
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AM_MAINTAINER_MODE
 AM_DEP_TRACK
 
@@ -117,7 +118,7 @@ AS_IF([test "x$with_systemd" = "xyes"], [
   ])
   AS_CASE([$with_systemd:$have_systemd],
     [yes:no],
-      [AC_MSG_ERROR([systemd expected but libsystemd not found])],
+      [AC_MSG_ERROR([systemd expected but libsystemd not found -- maybe you need to install the pkg-config and libsystemd-dev packages])],
     [*:yes],
        AC_DEFINE([HAVE_LIBSYSTEMD], [1], [Define if libsystemd is available])
   )
@@ -272,7 +273,7 @@ dnl Checks for header files.
 AC_SYS_LARGEFILE
 AC_CHECK_HEADERS([sys/cdefs.h sys/feature_tests.h])
 AC_CHECK_HEADERS([execinfo.h paths.h pwd.h grp.h uuid/uuid.h])
-AC_CHECK_HEADERS([sandbox.h])
+AC_CHECK_HEADERS([sandbox.h linux/filter.h linux/random.h])
 AC_CHECK_HEADERS([ws2tcpip.h])
 
 dnl Checks for typedefs, structures, and compiler characteristics.
@@ -400,16 +401,19 @@ dnl Checks for library functions.
 
 AC_SEARCH_LIBS(pow, [m])
 AC_SEARCH_LIBS(dlopen, [dl])
-AC_SEARCH_LIBS(clock_gettime, [rt],
-  [AC_DEFINE(HAVE_CLOCK_GETTIME,[1],[define if you have clock_gettime()])])
+
+AS_IF([test "$host_vendor" = "apple"], [],[
+  AC_SEARCH_LIBS(clock_gettime, [rt],
+    [AC_DEFINE(HAVE_CLOCK_GETTIME,[1],[define if you have clock_gettime()])])
+])
 
 AC_SEARCH_LIBS(backtrace, [execinfo],
   [AC_DEFINE(HAVE_BACKTRACE,[1],[define if you have backtrace()])])
 
-AC_SEARCH_LIBS(gethostbyname, [resolv nsl])
+AC_SEARCH_LIBS(gethostbyname, [resolv nsl ws2_32])
 AC_SEARCH_LIBS(recvfrom, [socket])
 AC_SEARCH_LIBS(kvm_open, [kvm])
-AC_SEARCH_LIBS(sodium_hex2bin, [sodium], [ ], AC_ERROR([libsodium >= 0.7.0 not found]))
+AC_SEARCH_LIBS(sodium_hex2bin, [sodium], [ ], AC_ERROR([libsodium >= 1.0.0 not found]))
 
 use_ldns=no
 AC_CHECK_HEADER([ldns/ldns.h], [
@@ -430,10 +434,24 @@ AM_CONDITIONAL(USE_LDNS, test x$use_ldns = xyes)
 AC_SUBST([LDNS_LIBS])
 
 case $host_os in
-  cygwin* | mingw* | pw32* | cegcc*)
+  cygwin* | pw32* | cegcc*)
     AC_CHECK_LIB([ws2_32], [_head_libws2_32_a])
     AC_CHECK_LIB([psapi], [_head_libpsapi_a])
     AC_CHECK_LIB([iphlpapi], [_head_libiphlpapi_a])
+  ;;
+  mingw*)
+    case $host_cpu in
+      amd64|x86_64)
+        AC_CHECK_LIB([ws2_32], [_head_lib64_libws2_32_a])
+        AC_CHECK_LIB([psapi], [_head_lib64_libpsapi_a])
+        AC_CHECK_LIB([iphlpapi], [_head_lib64_libiphlpapi_a])
+      ;;
+      *)
+        AC_CHECK_LIB([ws2_32], [__head_lib32_libws2_32_a])
+        AC_CHECK_LIB([psapi], [_head_lib32_libpsapi_a])
+        AC_CHECK_LIB([iphlpapi], [_head_lib32_libiphlpapi_a])
+      ;;
+    esac
   ;;
 esac
 
@@ -475,7 +493,6 @@ AH_VERBATIM([NDEBUG], [/* Never ever ignore assertions */
 AC_CONFIG_FILES([Makefile
                  contrib/Makefile
                  dist-build/Makefile
-                 dnscrypt-update-resolvers.sh
                  man/Makefile
                  src/Makefile
                  src/hostip/Makefile

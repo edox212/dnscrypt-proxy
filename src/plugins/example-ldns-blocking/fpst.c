@@ -4,16 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "fpst.h"
-
 typedef struct FPST {
     struct FPST *children;
     const char  *key;
     uint16_t     idx;
     uint16_t     bitmap;
-    uint32_t     hits; /* reserved */
-    uint64_t     val;
+    uint32_t     val;
 } FPST;
+
+#define FPST_DEFINED 1
+#include "fpst.h"
 
 #ifdef __GNUC__
 # define popcount(X) ((unsigned int) __builtin_popcount(X))
@@ -64,14 +64,12 @@ fpst_actual_index(const FPST *t, size_t i)
     return (size_t) popcount((uint32_t) b);
 }
 
-static FPST *
+static inline FPST *
 fpst_child_get(FPST *t, size_t i)
 {
     if (!fpst_bitmap_is_set(t, i)) {
         return NULL;
     }
-    assert(t->children != NULL);
-
     return &t->children[fpst_actual_index(t, i)];
 }
 
@@ -112,7 +110,7 @@ fpst_new(void)
 }
 
 FPST *
-fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
+fpst_insert(FPST *trie, const char *key, size_t len, uint32_t val)
 {
     FPST         *new_node_p;
     FPST         *t;
@@ -123,7 +121,7 @@ fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
     unsigned char c;
     unsigned char x;
 
-    if (len >= 0xffff) {
+    if (len >= 0x7fff) {
         return NULL;
     }
     if (trie == NULL) {
@@ -133,7 +131,6 @@ fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
         new_node_p->key = key;
         new_node_p->val = val;
         new_node_p->idx = 0U;
-        new_node_p->hits = 0U;
         new_node_p->bitmap = 0U;
         new_node_p->children = NULL;
 
@@ -144,14 +141,14 @@ fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
     for (;;) {
         lk = t->key;
         x = 0U;
-        for (; j < len; j++) {
+        for (; j <= len; j++) {
             x = ((unsigned char) lk[j]) ^ ((unsigned char) key[j]);
             if (x != 0U) {
                 break;
             }
         }
-        if (j == len && lk[j] == 0) {
-            assert(key[j] == 0);
+        if (j > len && lk[j - 1] == 0) {
+            assert(key[j - 1] == 0);
             t->val = val;
             return trie;
         }
@@ -163,12 +160,12 @@ fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
             /* keep index from the new key */
         } else if (i >= t->idx) {
             i = t->idx;
+            j = i / 2;
         } else {
             saved_node = *t;
             t->key = key;
             t->val = val;
             t->idx = (uint16_t) i;
-            t->hits = 0U;
             t->bitmap = 0U;
             t->children = NULL;
             c = fpst_quadbit_at(lk, i);
@@ -190,7 +187,6 @@ fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
     new_node.key = key;
     new_node.val = val;
     new_node.idx = 0U;
-    new_node.hits = 0U;
     new_node.bitmap = 0U;
     new_node.children = NULL;
     if (fpst_child_set(t, &new_node, (size_t) c) != 0) {
@@ -200,7 +196,7 @@ fpst_insert(FPST *trie, const char *key, size_t len, uint64_t val)
 }
 
 FPST *
-fpst_insert_str(FPST *trie, const char *key, uint64_t val)
+fpst_insert_str(FPST *trie, const char *key, uint32_t val)
 {
     return fpst_insert(trie, key, strlen(key), val);
 }
@@ -209,7 +205,7 @@ int
 fpst_starts_with_existing_key(FPST *trie,
                               const char *str, size_t len,
                               const char **found_key_p,
-                              uint64_t *found_val_p)
+                              uint32_t *found_val_p)
 {
     FPST          *t;
     const char    *lk;
@@ -248,6 +244,9 @@ fpst_starts_with_existing_key(FPST *trie,
         if (i > len * 2) {
             break;
         }
+        if (j > i / 2) {
+            j = i / 2;
+        }
         prefetch(t->children);
         c = fpst_quadbit_at(str, i);
         if (!fpst_bitmap_is_set(t, c)) {
@@ -265,7 +264,7 @@ fpst_starts_with_existing_key(FPST *trie,
 int
 fpst_str_starts_with_existing_key(FPST *trie, const char *str,
                                   const char **found_key_p,
-                                  uint64_t *found_val_p)
+                                  uint32_t *found_val_p)
 {
     return fpst_starts_with_existing_key(trie, str, strlen(str),
                                          found_key_p, found_val_p);
@@ -285,7 +284,6 @@ fpst_free_node(FPST *t, FPST_FreeFn free_kv_fn)
         fpst_free_node(&t->children[i], free_kv_fn);
     }
     free(t->children);
-    t->hits = 0U;
     t->bitmap = 0U;
     t->children = NULL;
     free_kv_fn(t->key, t->val);
@@ -293,7 +291,7 @@ fpst_free_node(FPST *t, FPST_FreeFn free_kv_fn)
 }
 
 int
-fpst_has_key(FPST *trie, const char *key, size_t len, uint64_t *found_val_p)
+fpst_has_key(FPST *trie, const char *key, size_t len, uint32_t *found_val_p)
 {
     const char *found_key;
     int         ret;
@@ -307,7 +305,7 @@ fpst_has_key(FPST *trie, const char *key, size_t len, uint64_t *found_val_p)
 }
 
 int
-fpst_has_key_str(FPST *trie, const char *key, uint64_t *found_val_p)
+fpst_has_key_str(FPST *trie, const char *key, uint32_t *found_val_p)
 {
     return fpst_has_key(trie, key, strlen(key), found_val_p);
 }
